@@ -129,6 +129,24 @@ jobs:
           repositories: cosmotech-gitops
           permission-contents: write
           permission-pull-requests: write
+      - name: Verify installation token repository scope
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api installation/repositories > "$RUNNER_TEMP/app-repositories.json"
+          python3 - <<'CHECK'
+          import json,os,pathlib
+          value=json.loads((pathlib.Path(os.environ['RUNNER_TEMP'])/'app-repositories.json').read_text())
+          assert [r['full_name'] for r in value['repositories']]==['rlcosmo/cosmotech-gitops'], 'Unexpected repository token scope'
+          assert value['total_count']==1
+          print('Installation token limited to rlcosmo/cosmotech-gitops.')
+          CHECK
+          if gh api repos/rlcosmo/cosmotech-infrastructure-iac >/dev/null 2>&1; then
+            echo 'Unexpected access to private infrastructure repository' >&2
+            exit 1
+          fi
       - uses: actions/checkout@v4
         with:
           repository: rlcosmo/cosmotech-gitops
