@@ -151,7 +151,7 @@ jobs:
         with:
           repository: rlcosmo/cosmotech-gitops
           token: ${{ steps.app.outputs.token }}
-      - name: Propose immutable image through a reviewed PR
+      - name: Propose immutable image through a DEV PR
         env:
           IMAGE: ${{ steps.verified.outputs.image }}
           SOURCE_SHA: ${{ steps.verified.outputs.sha }}
@@ -174,7 +174,7 @@ jobs:
           value['spec']['template']['spec']['containers'][0]['image']=image+':sha-'+os.environ['SOURCE_SHA']+'@'+digest
           p.write_text(json.dumps(value,indent=2)+'\n')
           body=pathlib.Path(os.environ['RUNNER_TEMP'])/'gitops-pr-body.md'
-          body.write_text('Promote Orders API image from approved CI commit '+os.environ['SOURCE_SHA']+'.\n\nImage: `'+os.environ['IMAGE']+'`. Tests, build and scan passed before ECR publication.\n\nAwait real GLPI/GMUD and DEV, QA, PO/PM, Infra/SRE approvals before merge and manual Argo CD synchronization. No approval or deployment is performed by this workflow.\n')
+          body.write_text('Promote Orders API DEV image from successful CI commit '+os.environ['SOURCE_SHA']+'.\n\nImage: `'+os.environ['IMAGE']+'`. Tests, build and scan passed before ECR publication.\n\nThe owner authorized this DEV image-only pilot without human approvals. DEV_AUTO_PROMOTE and the versioned DEV policy control automatic merge. Argo CD performs deployment; Actions never writes the EKS Deployment.\n')
           CHECK
           git config user.name 'cosmotech-automation[bot]'
           git config user.email 'cosmotech-automation@users.noreply.github.com'
@@ -186,3 +186,24 @@ jobs:
           if ! gh pr view "$branch" --repo rlcosmo/cosmotech-gitops --json url --jq .url; then
             gh pr create --repo rlcosmo/cosmotech-gitops --base main --head "$branch" --title "chore(orders): promote $SOURCE_SHA" --body-file "$RUNNER_TEMP/gitops-pr-body.md"
           fi
+      - name: Automatically merge only the authorized DEV image promotion
+        if: vars.DEV_AUTO_PROMOTE == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          SOURCE_SHA: ${{ steps.verified.outputs.sha }}
+          IMAGE: ${{ steps.verified.outputs.image }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch="image/orders-api-${SOURCE_SHA}"
+          gh pr view "$branch" --repo rlcosmo/cosmotech-gitops --json number,state,headRefOid > "$RUNNER_TEMP/promotion-pr.json"
+          if [[ "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["state"])' "$RUNNER_TEMP/promotion-pr.json")" == MERGED ]]; then
+            echo 'DEV promotion already merged; nothing to change.'
+            exit 0
+          fi
+          read -r pr head < <(python3 -c 'import json,sys;p=json.load(open(sys.argv[1]));print(p["number"],p["headRefOid"])' "$RUNNER_TEMP/promotion-pr.json")
+          [[ "$pr" =~ ^[0-9]+$ && "$head" =~ ^[0-9a-f]{40}$ ]]
+          git fetch origin main "$head"
+          git worktree add --detach "$RUNNER_TEMP/dev-validator" origin/main
+          (cd "$RUNNER_TEMP/dev-validator" && python3 scripts/validate_dev_image.py --base origin/main --head "$head" --expected-sha "$SOURCE_SHA" --expected-digest "${IMAGE#*@}")
+          gh api --method PUT "repos/rlcosmo/cosmotech-gitops/pulls/$pr/merge" -f sha="$head" -f merge_method=squash -f commit_title="chore(dev): promote Orders API $SOURCE_SHA" --jq 'if .merged then .sha else error(.message) end'
