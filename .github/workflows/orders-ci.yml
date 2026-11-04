@@ -151,6 +151,7 @@ jobs:
         with:
           repository: rlcosmo/cosmotech-gitops
           token: ${{ steps.app.outputs.token }}
+          fetch-depth: 0
       - name: Propose immutable image through a DEV PR
         env:
           IMAGE: ${{ steps.verified.outputs.image }}
