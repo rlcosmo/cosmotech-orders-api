@@ -1,5 +1,13 @@
 # cosmotech-orders-api
 
-Orders API and its currently shared Orders library, including repository/processing contracts needed by the API. Worker extraction is deferred. CI tests, builds, scans and publishes SHA tags to the existing immutable ECR repository using OIDC. Cross-repository GitOps PR automation requires a repository-limited GitHub App: variable GITOPS_APP_ID and secret GITOPS_APP_PRIVATE_KEY. Until installed, the published digest is a proposed-gitops-image artifact. CI never writes a Deployment.
+DEV pipeline: source push → tests/lint → Docker build → Trivy scan → immutable SHA image in ECR (AWS OIDC) → GitHub App proposes the GitOps image → automatic DEV merge → Argo CD sync → EKS rollout.
 
-Extracted from [aws-serverless-lab](https://github.com/rlcosmo/aws-serverless-lab) at `6f3e67f9e93d626393b23b6884b031767a63fea0` with original commit ancestry preserved. Original files remain available there as migration snapshots. No infrastructure was recreated by extraction.
+The owner explicitly authorized this first Orders API DEV pilot without human/GMUD approvals. `DEV_AUTO_PROMOTE=true` enables automatic merge only after successful CI and the exact image-only policy in cosmotech-gitops. The App token is limited to that repository. Actions never modifies the EKS Deployment directly. Authentication, scan and immutable image pinning remain enabled; no human approval is simulated.
+
+Repository Secrets: GITOPS_APP_PRIVATE_KEY and GITOPS_APP_ID (the ID may alternatively be a repository Variable). Source changes build images; workflow-only corrections can dispatch `approved_run_id` to reuse a successful CI artifact. The promotion validates source run/branch, repository scope, SHA/digest and the exact Deployment image-only diff before a SHA-matched merge. An already merged promotion is a no-op.
+
+Smoke test after rollout: port-forward `service/orders-api` service port 8000 to localhost 18080, then run `python scripts/smoke_dev_release.py`. It checks health/version, a random nonexistent order and an invalid POST; it never submits a valid order. Full business/SQS processing is outside this deployment smoke test.
+
+To stop automatic promotion, set DEV_AUTO_PROMOTE=false. Also disable the versioned GitOps DEV policy and Application automated sync, then apply the Application configuration on the dedicated management K3s. Reinstating mandatory approvals is a separate governance change; this pilot does not claim that private GitHub protections became available.
+
+Original commit ancestry is preserved. The currently shared Orders library remains here until Worker extraction is explicitly undertaken.
