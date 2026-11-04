@@ -3,7 +3,7 @@ on:
   push:
     branches: [main]
     # Source changes build images; workflow-only fixes use a targeted dispatch.
-    paths: [src/**, tests/**, requirements*.txt, .dockerignore, .github/workflows/orders-ci.yml]
+    paths: [src/**, tests/**, requirements*.txt, .dockerignore, scripts/report_kestra.py, .github/workflows/orders-ci.yml]
   pull_request:
   workflow_dispatch:
     inputs:
@@ -22,13 +22,28 @@ jobs:
     if: inputs.approved_run_id == ''
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions: {contents: read, id-token: write}
     steps:
       - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        with:
+          role-to-assume: arn:aws:iam::414053644145:role/cosmotech-orders-api-github-ecr
+          aws-region: us-east-1
       - uses: actions/setup-python@v5
         with: {python-version: '3.12', cache: pip}
+      - name: Show this real CI run in Kestra
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        run: python scripts/report_kestra.py --app orders-api --stage tests --state running
       - run: python -m pip install -r requirements.txt ruff==0.17.3
       - run: ruff check src tests
-      - run: python -m pytest tests/unit -q
+      - id: unit_tests
+        run: python -m pytest tests/unit -q
+      - name: Record tests and start image stage in Kestra
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        run: |
+          python scripts/report_kestra.py --app orders-api --stage tests --state success
+          python scripts/report_kestra.py --app orders-api --stage build_scan --state running
       - run: docker build -f src/orders/runtime/Dockerfile.api -t orders-api:${{ github.sha }} .
       - uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
@@ -42,6 +57,14 @@ jobs:
           name: orders-api-image
           path: /tmp/orders-api-image.tar
           retention-days: 2
+      - name: Record the real test-build-scan outcome
+        if: always() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        env:
+          TEST_OUTCOME: ${{ steps.unit_tests.outcome }}
+          JOB_STATE: ${{ job.status }}
+        run: |
+          if [[ "$TEST_OUTCOME" == success ]]; then stage=build_scan; else stage=tests; fi
+          python scripts/report_kestra.py --app orders-api --stage "$stage" --state "$JOB_STATE"
   publish:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && inputs.approved_run_id == ''
     needs: test-build-scan
@@ -52,6 +75,7 @@ jobs:
     outputs:
       image: ${{ steps.publish.outputs.image }}
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with: {name: orders-api-image, path: /tmp}
       - uses: aws-actions/configure-aws-credentials@v4
@@ -59,6 +83,8 @@ jobs:
           role-to-assume: arn:aws:iam::414053644145:role/cosmotech-orders-api-github-ecr
           aws-region: us-east-1
       - uses: aws-actions/amazon-ecr-login@v2
+      - name: Record ECR publication start
+        run: python scripts/report_kestra.py --app orders-api --stage publish --state running
       - id: publish
         shell: bash
         run: |
@@ -76,6 +102,11 @@ jobs:
           echo "$registry/$repository@$digest" > proposed-image.txt
       - uses: actions/upload-artifact@v4
         with: {name: proposed-gitops-image, path: proposed-image.txt}
+      - name: Record ECR publication outcome
+        if: always()
+        env:
+          JOB_STATE: ${{ job.status }}
+        run: python scripts/report_kestra.py --app orders-api --stage publish --state "$JOB_STATE"
   propose-gitops:
     if: always() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && (needs.publish.result == 'success' || (github.event_name == 'workflow_dispatch' && inputs.approved_run_id != ''))
     needs: publish
@@ -84,7 +115,16 @@ jobs:
     permissions:
       contents: read
       actions: read
+      id-token: write
     steps:
+      - uses: actions/checkout@v4
+      - run: cp scripts/report_kestra.py "$RUNNER_TEMP/report_kestra.py"
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::414053644145:role/cosmotech-orders-api-github-ecr
+          aws-region: us-east-1
+      - name: Record GitOps promotion start
+        run: python "$RUNNER_TEMP/report_kestra.py" --app orders-api --stage gitops --state running
       - name: Verify approved source run and immutable image
         id: verified
         env:
@@ -208,3 +248,8 @@ jobs:
           git worktree add --detach "$RUNNER_TEMP/dev-validator" origin/main
           (cd "$RUNNER_TEMP/dev-validator" && python3 scripts/validate_dev_image.py --base origin/main --head "$head" --expected-sha "$SOURCE_SHA" --expected-digest "${IMAGE#*@}")
           gh api --method PUT "repos/rlcosmo/cosmotech-gitops/pulls/$pr/merge" -f sha="$head" -f merge_method=squash -f commit_title="chore(dev): promote Orders API $SOURCE_SHA" --jq 'if .merged then .sha else error(.message) end'
+      - name: Record GitOps promotion outcome
+        if: always()
+        env:
+          JOB_STATE: ${{ job.status }}
+        run: python "$RUNNER_TEMP/report_kestra.py" --app orders-api --stage gitops --state "$JOB_STATE"
