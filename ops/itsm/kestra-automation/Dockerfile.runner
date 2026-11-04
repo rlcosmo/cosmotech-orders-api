@@ -1,9 +1,0 @@
-FROM python:3.12-slim@sha256:b18b261e1b4974b4f321451ad5251ded85abb22c2b8b262da527dda1d031ab30
-WORKDIR /app
-ENV PYTHONPATH=/app/src PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
-COPY requirements-automation.txt .
-RUN pip install --no-cache-dir -r requirements-automation.txt
-COPY --chown=10001:10001 src/automation ./src/automation
-COPY --chown=10001:10001 scripts/test_kestra_glpi.py ./scripts/test_kestra_glpi.py
-USER 10001:10001
-CMD ["python", "scripts/test_kestra_glpi.py"]

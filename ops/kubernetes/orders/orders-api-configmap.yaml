@@ -1,9 +1,0 @@
-apiVersion: v1
-data:
-  AWS_DEFAULT_REGION: us-east-1
-  DYNAMODB_TABLE: aws-eks-istio-lab-dev-orders-data
-  SQS_QUEUE_URL: https://sqs.us-east-1.amazonaws.com/414053644145/aws-eks-istio-lab-dev-orders-eks
-kind: ConfigMap
-metadata:
-  name: orders-config
-  namespace: orders-api

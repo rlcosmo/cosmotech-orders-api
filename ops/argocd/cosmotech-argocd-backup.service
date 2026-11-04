@@ -1,9 +1,0 @@
-[Unit]
-Description=Consistent dedicated Argo CD management database and configuration capture
-After=k3s.service
-[Service]
-Type=oneshot
-User=root
-UMask=0077
-ExecStart=/opt/cosmotech/argocd/backup.sh
-TimeoutStartSec=5min

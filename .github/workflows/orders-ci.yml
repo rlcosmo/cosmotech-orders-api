@@ -1,0 +1,105 @@
+name: orders-ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: orders-ci-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  test-build-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12', cache: pip}
+      - run: python -m pip install -r requirements.txt ruff==0.17.3
+      - run: ruff check src tests
+      - run: python -m pytest tests/unit -q
+      - run: docker build -f src/orders/runtime/Dockerfile.api -t orders-api:${{ github.sha }} .
+      - uses: aquasecurity/trivy-action@0.36.0
+        with:
+          image-ref: orders-api:${{ github.sha }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+      - run: docker save orders-api:${{ github.sha }} -o /tmp/orders-api-image.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: orders-api-image
+          path: /tmp/orders-api-image.tar
+          retention-days: 2
+  publish:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: test-build-scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      image: ${{ steps.publish.outputs.image }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with: {name: orders-api-image, path: /tmp}
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::414053644145:role/cosmotech-orders-api-github-ecr
+          aws-region: us-east-1
+      - uses: aws-actions/amazon-ecr-login@v2
+      - id: publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker load -i /tmp/orders-api-image.tar
+          registry=414053644145.dkr.ecr.us-east-1.amazonaws.com
+          repository=aws-eks-istio-lab-dev-orders-api
+          image="$registry/$repository:sha-$GITHUB_SHA"
+          docker tag "orders-api:$GITHUB_SHA" "$image"
+          if ! aws ecr describe-images --repository-name "$repository" --image-ids "imageTag=sha-$GITHUB_SHA" >/dev/null 2>&1; then
+            docker push "$image"
+          fi
+          digest="$(aws ecr describe-images --repository-name "$repository" --image-ids "imageTag=sha-$GITHUB_SHA" --query 'imageDetails[0].imageDigest' --output text)"
+          echo "image=$registry/$repository@$digest" >> "$GITHUB_OUTPUT"
+          echo "$registry/$repository@$digest" > proposed-image.txt
+      - uses: actions/upload-artifact@v4
+        with: {name: proposed-gitops-image, path: proposed-image.txt}
+  propose-gitops:
+    if: vars.GITOPS_APP_ID != ''
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/create-github-app-token@v2
+        id: app
+        with:
+          app-id: ${{ vars.GITOPS_APP_ID }}
+          private-key: ${{ secrets.GITOPS_APP_PRIVATE_KEY }}
+          owner: rlcosmo
+          repositories: cosmotech-gitops
+      - uses: actions/checkout@v4
+        with:
+          repository: rlcosmo/cosmotech-gitops
+          token: ${{ steps.app.outputs.token }}
+      - name: Propose immutable image through a reviewed PR
+        env:
+          IMAGE: ${{ needs.publish.outputs.image }}
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          python3 - <<'PY'
+          import json,os,pathlib
+          p=pathlib.Path('gitops/apps/orders-api/dev/deployment.json')
+          value=json.loads(p.read_text())
+          value['spec']['template']['spec']['containers'][0]['image']=os.environ['IMAGE']
+          p.write_text(json.dumps(value,indent=2)+'\n')
+          PY
+          branch="image/orders-api-${GITHUB_SHA}"
+          git switch -c "$branch"
+          git config user.name 'cosmotech-automation[bot]'
+          git config user.email 'cosmotech-automation@users.noreply.github.com'
+          git add gitops/apps/orders-api/dev/deployment.json
+          git commit -m "chore(orders): propose image $GITHUB_SHA"
+          git push origin "$branch"
+          gh pr create --repo rlcosmo/cosmotech-gitops --base main --head "$branch" --title "chore(orders): promote $GITHUB_SHA" --body 'Immutable image passed CI. Await real GLPI/GMUD and DEV, QA, PO/PM, Infra/SRE approvals before merge and Argo CD synchronization.'
