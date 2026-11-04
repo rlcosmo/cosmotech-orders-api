@@ -2,8 +2,16 @@ name: orders-ci
 on:
   push:
     branches: [main]
+    # Source changes build images; workflow-only fixes use a targeted dispatch.
+    paths: [src/**, tests/**, requirements*.txt, .dockerignore]
   pull_request:
   workflow_dispatch:
+    inputs:
+      approved_run_id:
+        description: Reuse a successful orders-ci image for proposal only; empty builds normally
+        type: string
+        required: false
+        default: ''
 permissions:
   contents: read
 concurrency:
@@ -11,6 +19,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   test-build-scan:
+    if: inputs.approved_run_id == ''
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -34,7 +43,7 @@ jobs:
           path: /tmp/orders-api-image.tar
           retention-days: 2
   publish:
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && inputs.approved_run_id == ''
     needs: test-build-scan
     runs-on: ubuntu-latest
     permissions:
@@ -68,38 +77,94 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: {name: proposed-gitops-image, path: proposed-image.txt}
   propose-gitops:
-    if: vars.GITOPS_APP_ID != ''
+    if: always() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && (needs.publish.result == 'success' || (github.event_name == 'workflow_dispatch' && inputs.approved_run_id != ''))
     needs: publish
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
     steps:
+      - name: Verify approved source run and immutable image
+        id: verified
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN: ${{ inputs.approved_run_id }}
+          BUILT_IMAGE: ${{ needs.publish.outputs.image }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "$SOURCE_RUN" ]]; then
+            [[ "$SOURCE_RUN" =~ ^[0-9]+$ ]]
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN" > "$RUNNER_TEMP/source-run.json"
+            python3 - <<'CHECK'
+          import json,os,pathlib
+          run=json.loads((pathlib.Path(os.environ['RUNNER_TEMP'])/'source-run.json').read_text())
+          assert run['conclusion']=='success' and run['head_branch']=='main'
+          assert run['path']=='.github/workflows/orders-ci.yml' and run['event'] in ['push','workflow_dispatch']
+          CHECK
+            gh run download "$SOURCE_RUN" --repo "$GITHUB_REPOSITORY" --name proposed-gitops-image --dir "$RUNNER_TEMP/approved-image"
+          fi
+          python3 - <<'CHECK'
+          import json,os,pathlib,re
+          root=pathlib.Path(os.environ['RUNNER_TEMP'])
+          if os.environ['SOURCE_RUN']:
+              run=json.loads((root/'source-run.json').read_text())
+              sha=run['head_sha']
+              image=(root/'approved-image/proposed-image.txt').read_text().strip()
+          else:
+              sha=os.environ['GITHUB_SHA']
+              image=os.environ['BUILT_IMAGE']
+          assert re.fullmatch('[0-9a-f]{40}',sha)
+          assert re.fullmatch(r'414053644145\.dkr\.ecr\.us-east-1\.amazonaws\.com/aws-eks-istio-lab-dev-orders-api@sha256:[0-9a-f]{64}',image)
+          with open(os.environ['GITHUB_OUTPUT'],'a') as output:
+              output.write(f'sha={sha}\nimage={image}\n')
+          CHECK
       - uses: actions/create-github-app-token@v2
         id: app
         with:
-          app-id: ${{ vars.GITOPS_APP_ID }}
+          app-id: ${{ vars.GITOPS_APP_ID || secrets.GITOPS_APP_ID }}
           private-key: ${{ secrets.GITOPS_APP_PRIVATE_KEY }}
           owner: rlcosmo
           repositories: cosmotech-gitops
+          permission-contents: write
+          permission-pull-requests: write
       - uses: actions/checkout@v4
         with:
           repository: rlcosmo/cosmotech-gitops
           token: ${{ steps.app.outputs.token }}
       - name: Propose immutable image through a reviewed PR
         env:
-          IMAGE: ${{ needs.publish.outputs.image }}
+          IMAGE: ${{ steps.verified.outputs.image }}
+          SOURCE_SHA: ${{ steps.verified.outputs.sha }}
           GH_TOKEN: ${{ steps.app.outputs.token }}
+        shell: bash
         run: |
-          python3 - <<'PY'
+          set -euo pipefail
+          branch="image/orders-api-${SOURCE_SHA}"
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
+            git fetch origin "$branch"
+            git switch -c "$branch" FETCH_HEAD
+          else
+            git switch -c "$branch"
+          fi
+          python3 - <<'CHECK'
           import json,os,pathlib
           p=pathlib.Path('gitops/apps/orders-api/dev/deployment.json')
           value=json.loads(p.read_text())
-          value['spec']['template']['spec']['containers'][0]['image']=os.environ['IMAGE']
+          image,digest=os.environ['IMAGE'].split('@')
+          value['spec']['template']['spec']['containers'][0]['image']=image+':sha-'+os.environ['SOURCE_SHA']+'@'+digest
           p.write_text(json.dumps(value,indent=2)+'\n')
-          PY
-          branch="image/orders-api-${GITHUB_SHA}"
-          git switch -c "$branch"
+          body=pathlib.Path(os.environ['RUNNER_TEMP'])/'gitops-pr-body.md'
+          body.write_text('Promote Orders API image from approved CI commit '+os.environ['SOURCE_SHA']+'.\n\nImage: `'+os.environ['IMAGE']+'`. Tests, build and scan passed before ECR publication.\n\nAwait real GLPI/GMUD and DEV, QA, PO/PM, Infra/SRE approvals before merge and manual Argo CD synchronization. No approval or deployment is performed by this workflow.\n')
+          CHECK
           git config user.name 'cosmotech-automation[bot]'
           git config user.email 'cosmotech-automation@users.noreply.github.com'
           git add gitops/apps/orders-api/dev/deployment.json
-          git commit -m "chore(orders): propose image $GITHUB_SHA"
-          git push origin "$branch"
-          gh pr create --repo rlcosmo/cosmotech-gitops --base main --head "$branch" --title "chore(orders): promote $GITHUB_SHA" --body 'Immutable image passed CI. Await real GLPI/GMUD and DEV, QA, PO/PM, Infra/SRE approvals before merge and Argo CD synchronization.'
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(orders): propose image $SOURCE_SHA"
+            git push origin "$branch"
+          fi
+          if ! gh pr view "$branch" --repo rlcosmo/cosmotech-gitops --json url --jq .url; then
+            gh pr create --repo rlcosmo/cosmotech-gitops --base main --head "$branch" --title "chore(orders): promote $SOURCE_SHA" --body-file "$RUNNER_TEMP/gitops-pr-body.md"
+          fi
