@@ -71,3 +71,23 @@ def test_tracing_does_not_record_sensitive_exception_text(monkeypatch):
     assert not result.events
     assert "private-token-never-export" not in str(result.attributes)
     provider.shutdown()
+
+
+def test_metrics_record_failure_without_sensitive_or_unbounded_attributes(monkeypatch):
+    from unittest.mock import Mock
+    provider = TracerProvider()
+    monkeypatch.setattr(trace, "get_tracer", lambda name: provider.get_tracer(name))
+    counter, duration = Mock(), Mock()
+    monkeypatch.setattr(tracing, "_span_counter", counter)
+    monkeypatch.setattr(tracing, "_span_duration", duration)
+    try:
+        with tracing.span("fixed.operation", attributes={"private": "never-export-to-metrics"}):
+            raise ValueError("private exception")
+    except ValueError:
+        pass
+    counter.add.assert_called_once_with(1, {"operation": "fixed.operation", "span.kind": "INTERNAL", "status": "error"})
+    value, attributes = duration.record.call_args.args
+    assert value >= 0
+    assert attributes == counter.add.call_args.args[1]
+    assert "private" not in str(attributes)
+    provider.shutdown()

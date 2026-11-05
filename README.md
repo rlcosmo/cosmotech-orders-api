@@ -23,3 +23,5 @@ A startup probe controla a inicialização antes de habilitar readiness/liveness
 ## Logs e conexões sintéticas
 
 A configuração em `deploy/dev/configmap.json` habilita um ciclo a cada 300 segundos por pod. Cada ciclo registra heartbeat JSON, chama a rota de diagnóstico do serviço par e faz GET HTTPS em `example.com`. O endpoint GET `/diagnostics/ping` recebe chamadas internas/externas e registra um span de servidor e log correlacionado por trace ID. Os clientes propagam W3C traceparent. Não são criados pedidos ou alterados dados de negócio. Alvos são fixos, chamadas têm timeout de cinco segundos e não seguem redirects; logs incluem destino, direção, status e duração, sem corpo ou credenciais.
+
+O APM exporta métricas OTLP reais de volume e duração por operação, com atributos limitados a operação, tipo e estado. Exportação assíncrona a cada 60 segundos; chamadas sintéticas continuam a cada 5 minutos. Logs estruturados seguem pelo Alloy para Loki e Zabbix.
