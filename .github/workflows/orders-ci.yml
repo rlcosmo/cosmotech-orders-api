@@ -260,7 +260,15 @@ jobs:
           git fetch origin main "$head"
           git worktree add --detach "$RUNNER_TEMP/dev-validator" origin/main
           (cd "$RUNNER_TEMP/dev-validator" && python3 scripts/validate_dev_image.py --base origin/main --head "$head" --expected-sha "$SOURCE_SHA" --expected-digest "${IMAGE#*@}" --expected-manifests "$RUNNER_TEMP/deployment-bundle.json")
-          gh api --method PUT "repos/rlcosmo/cosmotech-gitops/pulls/$pr/merge" -f sha="$head" -f merge_method=squash -f commit_title="chore(dev): promote Orders API $SOURCE_SHA" --jq 'if .merged then .sha else error(.message) end'
+          # Concurrent app promotions can advance main after validation. Revalidate every retry.
+          for merge_attempt in $(seq 1 5); do
+            if gh api --method PUT "repos/rlcosmo/cosmotech-gitops/pulls/$pr/merge" -f sha="$head" -f merge_method=squash -f commit_title="chore(dev): promote Orders API $SOURCE_SHA" --jq 'if .merged then .sha else error(.message) end'; then exit 0; fi
+            if [[ "$merge_attempt" == 5 ]]; then exit 1; fi
+            sleep 2
+            git fetch origin main
+            git -C "$RUNNER_TEMP/dev-validator" checkout --detach origin/main
+            (cd "$RUNNER_TEMP/dev-validator" && python3 scripts/validate_dev_image.py --base origin/main --head "$head" --expected-sha "$SOURCE_SHA" --expected-digest "${IMAGE#*@}" --expected-manifests "$RUNNER_TEMP/deployment-bundle.json")
+          done
       - name: Record GitOps promotion outcome
         if: always()
         env:
