@@ -3,7 +3,10 @@
   "data": {
     "AWS_DEFAULT_REGION": "us-east-1",
     "DYNAMODB_TABLE": "aws-eks-istio-lab-dev-orders-data",
-    "SQS_QUEUE_URL": "https://sqs.us-east-1.amazonaws.com/414053644145/aws-eks-istio-lab-dev-orders-eks"
+    "SQS_QUEUE_URL": "https://sqs.us-east-1.amazonaws.com/414053644145/aws-eks-istio-lab-dev-orders-eks",
+    "SYNTHETIC_INTERVAL_SECONDS": "300",
+    "SYNTHETIC_PEER_URL": "http://orders-worker.orders-worker.svc.cluster.local:8000/diagnostics/ping",
+    "SYNTHETIC_EXTERNAL_URL": "https://example.com/"
   },
   "kind": "ConfigMap",
   "metadata": {

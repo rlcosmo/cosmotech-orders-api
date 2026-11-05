@@ -13,6 +13,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 
 from orders.consumer.repository import DynamoDBOrderRepository, create_dynamodb_resource
 from orders.producer.handler import handler
+from orders.runtime.connectivity import receive_ping, start_connectivity_checks
 from orders.shared.tracing import configure_tracing
 from orders.shared.validation import MAX_REQUEST_BYTES
 
@@ -57,6 +58,9 @@ def main() -> None:
             self.wfile.write(encoded)
 
         def do_GET(self):
+            if self.path == "/diagnostics/ping":
+                carrier = {k.lower():v for k,v in self.headers.items() if k.lower() in {"traceparent", "tracestate"}}
+                return self.respond(200, receive_ping("orders-api", carrier))
             if self.path in {"/health/live", "/health/ready"}:
                 return self.respond(200, {"status": "ready"})
             if self.path == "/version":
@@ -85,7 +89,9 @@ def main() -> None:
             result = handler({"body": json.dumps(payload), "headers": dict(self.headers)}, None)
             self.respond(result["statusCode"], json.loads(result["body"]))
 
-    HTTPServer(("0.0.0.0", 8000), RequestHandler).serve_forever()
+    server = HTTPServer(("0.0.0.0", 8000), RequestHandler)
+    start_connectivity_checks("orders-api")
+    server.serve_forever()
 
 
 if __name__ == "__main__":

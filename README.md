@@ -19,3 +19,7 @@ Original commit ancestry is preserved. The currently shared Orders library remai
 ## Inicialização e disponibilidade no host
 
 A startup probe controla a inicialização antes de habilitar readiness/liveness. No worker, ela só passa após a primeira consulta SQS bem-sucedida; a primeira verificação ocorre após a espera normal de long polling (20 segundos). Falhas reais de acesso à fila continuam retornando 503. O rollout mantém a réplica antiga até a nova ficar pronta, usando maxUnavailable=0, maxSurge=1 e a readiness gate do ALB habilitada no namespace pela configuração de infraestrutura `ops/kubernetes/orders-ingress-readiness.json`.
+
+## Logs e conexões sintéticas
+
+A configuração em `deploy/dev/configmap.json` habilita um ciclo a cada 300 segundos por pod. Cada ciclo registra heartbeat JSON, chama a rota de diagnóstico do serviço par e faz GET HTTPS em `example.com`. O endpoint GET `/diagnostics/ping` recebe chamadas internas/externas e registra um span de servidor e log correlacionado por trace ID. Os clientes propagam W3C traceparent. Não são criados pedidos ou alterados dados de negócio. Alvos são fixos, chamadas têm timeout de cinco segundos e não seguem redirects; logs incluem destino, direção, status e duração, sem corpo ou credenciais.

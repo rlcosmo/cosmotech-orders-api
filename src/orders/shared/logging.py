@@ -16,7 +16,7 @@ class JsonFormatter(logging.Formatter):
             "logger": record.name,
             "message": record.getMessage(),
         }
-        for key in ("request_id", "event", "reason", "error_type"):
+        for key in ("request_id", "event", "reason", "error_type", "service", "direction", "target", "status_code", "duration_ms", "trace_id", "span_id", "synthetic", "result", "interval_seconds", "cycle_id"):
             if hasattr(record, key):
                 entry[key] = getattr(record, key)
         if record.exc_info:
@@ -27,6 +27,7 @@ class JsonFormatter(logging.Formatter):
 def get_logger(name: str) -> logging.Logger:
     """Return a logger configured for structured output."""
     logger = logging.getLogger(name)
+    logger.setLevel(logging.INFO)
     if not logger.handlers:
         handler = logging.StreamHandler()
         handler.setFormatter(JsonFormatter())
