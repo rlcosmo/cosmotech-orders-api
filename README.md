@@ -11,3 +11,7 @@ Smoke test after rollout: port-forward `service/orders-api` service port 8000 to
 To stop automatic promotion, set DEV_AUTO_PROMOTE=false. Also disable the versioned GitOps DEV policy and Application automated sync, then apply the Application configuration on the dedicated management K3s. Reinstating mandatory approvals is a separate governance change; this pilot does not claim that private GitHub protections became available.
 
 Original commit ancestry is preserved. The currently shared Orders library remains here until Worker extraction is explicitly undertaken.
+
+## Configuração e entrega DEV
+
+`deploy/dev` neste repositório é a origem oficial de Deployment, ConfigMap, Service, HPA e host. Um push em `main` executa testes, valida essas configurações, constrói e verifica a imagem, publica no ECR e promove automaticamente o conjunto completo para o espelho gerado de entrega GitOps. Argo CD reconcilia o cluster e Kestra mostra as etapas reais por cluster. Não há aprovação humana nesta fase. Não edite o espelho gerado para configurar esta aplicação.

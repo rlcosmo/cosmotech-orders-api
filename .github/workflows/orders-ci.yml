@@ -3,7 +3,7 @@ on:
   push:
     branches: [main]
     # Source changes build images; workflow-only fixes use a targeted dispatch.
-    paths: [src/**, tests/**, requirements*.txt, .dockerignore, scripts/report_kestra.py, .github/workflows/orders-ci.yml]
+    paths: [deploy/**, scripts/validate_deployment.py, src/**, tests/**, requirements*.txt, .dockerignore, scripts/report_kestra.py, .github/workflows/orders-ci.yml]
   pull_request:
   workflow_dispatch:
     inputs:
@@ -36,6 +36,7 @@ jobs:
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         run: python scripts/report_kestra.py --app orders-api --stage tests --state running
       - run: python -m pip install -r requirements.txt ruff==0.17.3
+      - run: python scripts/validate_deployment.py --application orders-api
       - run: ruff check src tests
       - id: unit_tests
         run: python -m pytest tests/unit -q
@@ -160,6 +161,17 @@ jobs:
           with open(os.environ['GITHUB_OUTPUT'],'a') as output:
               output.write(f'sha={sha}\nimage={image}\n')
           CHECK
+      - name: Check out the exact tested application configuration
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.verified.outputs.sha }}
+          path: application-source
+      - name: Prepare the tested complete deployment bundle
+        env:
+          IMAGE: ${{ steps.verified.outputs.image }}
+          SOURCE_SHA: ${{ steps.verified.outputs.sha }}
+        working-directory: application-source
+        run: python scripts/validate_deployment.py --application orders-api --image "$IMAGE" --sha "$SOURCE_SHA" --output "$RUNNER_TEMP/deployment-bundle.json"
       - uses: actions/create-github-app-token@v2
         id: app
         with:
@@ -192,7 +204,7 @@ jobs:
           repository: rlcosmo/cosmotech-gitops
           token: ${{ steps.app.outputs.token }}
           fetch-depth: 0
-      - name: Propose immutable image through a DEV PR
+      - name: Deliver tested application configuration through a DEV PR
         env:
           IMAGE: ${{ steps.verified.outputs.image }}
           SOURCE_SHA: ${{ steps.verified.outputs.sha }}
@@ -209,17 +221,18 @@ jobs:
           fi
           python3 - <<'CHECK'
           import json,os,pathlib
-          p=pathlib.Path('gitops/apps/orders-api/dev/deployment.json')
-          value=json.loads(p.read_text())
-          image,digest=os.environ['IMAGE'].split('@')
-          value['spec']['template']['spec']['containers'][0]['image']=image+':sha-'+os.environ['SOURCE_SHA']+'@'+digest
-          p.write_text(json.dumps(value,indent=2)+'\n')
+          bundle=json.loads((pathlib.Path(os.environ['RUNNER_TEMP'])/'deployment-bundle.json').read_text())
+          directory=pathlib.Path('gitops/apps/orders-api/dev')
+          for name,value in bundle['resources'].items():
+              (directory/name).write_text(json.dumps(value,indent=2)+'\n')
+          proof=pathlib.Path('gitops/releases/orders-api-dev.json');proof.parent.mkdir(exist_ok=True)
+          proof.write_text(json.dumps(bundle,indent=2,sort_keys=True)+'\n')
           body=pathlib.Path(os.environ['RUNNER_TEMP'])/'gitops-pr-body.md'
-          body.write_text('Promote Orders API DEV image from successful CI commit '+os.environ['SOURCE_SHA']+'.\n\nImage: `'+os.environ['IMAGE']+'`. Tests, build and scan passed before ECR publication.\n\nThe owner authorized this DEV image-only pilot without human approvals. DEV_AUTO_PROMOTE and the versioned DEV policy control automatic merge. Argo CD performs deployment; Actions never writes the EKS Deployment.\n')
+          body.write_text('Deliver the complete tested orders-api configuration from its application repository at '+os.environ['SOURCE_SHA']+'.\n\nIncludes Deployment, ConfigMap, Service, HPA and host. Automatic DEV promotion without human approvals. GitOps is the generated delivery mirror; change deploy/dev in the application repository.\n')
           CHECK
           git config user.name 'cosmotech-automation[bot]'
           git config user.email 'cosmotech-automation@users.noreply.github.com'
-          git add gitops/apps/orders-api/dev/deployment.json
+          git add gitops/apps/orders-api/dev gitops/releases/orders-api-dev.json
           if ! git diff --cached --quiet; then
             git commit -m "chore(orders): propose image $SOURCE_SHA"
             git push origin "$branch"
@@ -227,7 +240,7 @@ jobs:
           if ! gh pr view "$branch" --repo rlcosmo/cosmotech-gitops --json url --jq .url; then
             gh pr create --repo rlcosmo/cosmotech-gitops --base main --head "$branch" --title "chore(orders): promote $SOURCE_SHA" --body-file "$RUNNER_TEMP/gitops-pr-body.md"
           fi
-      - name: Automatically merge only the authorized DEV image promotion
+      - name: Automatically merge the tested DEV application configuration
         if: vars.DEV_AUTO_PROMOTE == 'true'
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
@@ -246,7 +259,7 @@ jobs:
           [[ "$pr" =~ ^[0-9]+$ && "$head" =~ ^[0-9a-f]{40}$ ]]
           git fetch origin main "$head"
           git worktree add --detach "$RUNNER_TEMP/dev-validator" origin/main
-          (cd "$RUNNER_TEMP/dev-validator" && python3 scripts/validate_dev_image.py --base origin/main --head "$head" --expected-sha "$SOURCE_SHA" --expected-digest "${IMAGE#*@}")
+          (cd "$RUNNER_TEMP/dev-validator" && python3 scripts/validate_dev_image.py --base origin/main --head "$head" --expected-sha "$SOURCE_SHA" --expected-digest "${IMAGE#*@}" --expected-manifests "$RUNNER_TEMP/deployment-bundle.json")
           gh api --method PUT "repos/rlcosmo/cosmotech-gitops/pulls/$pr/merge" -f sha="$head" -f merge_method=squash -f commit_title="chore(dev): promote Orders API $SOURCE_SHA" --jq 'if .merged then .sha else error(.message) end'
       - name: Record GitOps promotion outcome
         if: always()

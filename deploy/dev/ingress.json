@@ -1,0 +1,40 @@
+{
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "Ingress",
+  "metadata": {
+    "name": "orders-api-dev",
+    "namespace": "orders-api",
+    "annotations": {
+      "alb.ingress.kubernetes.io/group.name": "observability",
+      "alb.ingress.kubernetes.io/group.order": "20",
+      "alb.ingress.kubernetes.io/target-type": "ip",
+      "alb.ingress.kubernetes.io/listen-ports": "[{\"HTTPS\":443}]",
+      "alb.ingress.kubernetes.io/healthcheck-path": "/health/ready",
+      "alb.ingress.kubernetes.io/success-codes": "200"
+    }
+  },
+  "spec": {
+    "ingressClassName": "alb",
+    "rules": [
+      {
+        "host": "orders-api-dev.cosmotechsolutions.com.br",
+        "http": {
+          "paths": [
+            {
+              "path": "/",
+              "pathType": "Prefix",
+              "backend": {
+                "service": {
+                  "name": "orders-api",
+                  "port": {
+                    "number": 8000
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}
