@@ -18,8 +18,8 @@
     },
     "strategy": {
       "rollingUpdate": {
-        "maxSurge": "25%",
-        "maxUnavailable": "25%"
+        "maxSurge": 1,
+        "maxUnavailable": 0
       },
       "type": "RollingUpdate"
     },
@@ -89,10 +89,10 @@
                 "port": "http",
                 "scheme": "HTTP"
               },
-              "initialDelaySeconds": 10,
+              "initialDelaySeconds": 0,
               "periodSeconds": 10,
               "successThreshold": 1,
-              "timeoutSeconds": 1
+              "timeoutSeconds": 2
             },
             "name": "orders-api",
             "ports": [
@@ -109,10 +109,10 @@
                 "port": "http",
                 "scheme": "HTTP"
               },
-              "initialDelaySeconds": 5,
+              "initialDelaySeconds": 0,
               "periodSeconds": 5,
               "successThreshold": 1,
-              "timeoutSeconds": 1
+              "timeoutSeconds": 2
             },
             "resources": {
               "limits": {
@@ -141,7 +141,19 @@
                 "name": "otel-java-agent",
                 "readOnly": true
               }
-            ]
+            ],
+            "startupProbe": {
+              "httpGet": {
+                "path": "/health/live",
+                "port": "http",
+                "scheme": "HTTP"
+              },
+              "initialDelaySeconds": 2,
+              "periodSeconds": 5,
+              "timeoutSeconds": 2,
+              "failureThreshold": 30,
+              "successThreshold": 1
+            }
           }
         ],
         "dnsPolicy": "ClusterFirst",
@@ -165,6 +177,7 @@
           }
         ]
       }
-    }
+    },
+    "minReadySeconds": 10
   }
 }
