@@ -1,2 +1,2 @@
 """Application version reported by the read-only /version endpoint."""
-VERSION = '2.0.4-lab'
+VERSION = '2.0.5-lab'
