@@ -1,17 +1,5 @@
+# Prepared cutover: requires the reviewed Kestra/SSM/signature activation.
 name: orders-ci
-on:
-  push:
-    branches: [main]
-    # Source changes build images; workflow-only fixes use a targeted dispatch.
-    paths: [deploy/**, scripts/validate_deployment.py, src/**, tests/**, requirements*.txt, .dockerignore, scripts/report_kestra.py, .github/workflows/orders-ci.yml]
-  pull_request:
-  workflow_dispatch:
-    inputs:
-      approved_run_id:
-        description: Reuse a successful orders-ci image for proposal only; empty builds normally
-        type: string
-        required: false
-        default: ''
 permissions:
   contents: read
 concurrency:
@@ -19,55 +7,62 @@ concurrency:
   cancel-in-progress: false
 jobs:
   test-build-scan:
-    if: inputs.approved_run_id == ''
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    permissions: {contents: read, id-token: write}
+    permissions:
+      contents: read
+      id-token: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: aws-actions/configure-aws-credentials@v4
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-        with:
-          role-to-assume: arn:aws:iam::414053644145:role/cosmotech-orders-api-github-ecr
-          aws-region: us-east-1
-      - uses: actions/setup-python@v5
-        with: {python-version: '3.12', cache: pip}
-      - name: Show this real CI run in Kestra
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-        run: python scripts/report_kestra.py --app orders-api --stage tests --state running
-      - run: python -m pip install -r requirements.txt ruff==0.17.3
-      - run: python scripts/validate_deployment.py --application orders-api
-      - run: ruff check src tests
-      - id: unit_tests
-        run: python -m pytest tests/unit -q
-      - name: Record tests and start image stage in Kestra
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-        run: |
-          python scripts/report_kestra.py --app orders-api --stage tests --state success
-          python scripts/report_kestra.py --app orders-api --stage build_scan --state running
-      - run: docker build -f src/orders/runtime/Dockerfile.api -t orders-api:${{ github.sha }} .
-      - uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
-        with:
-          image-ref: orders-api:${{ github.sha }}
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: '1'
-      - run: docker save orders-api:${{ github.sha }} -o /tmp/orders-api-image.tar
-      - uses: actions/upload-artifact@v4
-        with:
-          name: orders-api-image
-          path: /tmp/orders-api-image.tar
-          retention-days: 2
-      - name: Record the real test-build-scan outcome
-        if: always() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-        env:
-          TEST_OUTCOME: ${{ steps.unit_tests.outcome }}
-          JOB_STATE: ${{ job.status }}
-        run: |
-          if [[ "$TEST_OUTCOME" == success ]]; then stage=build_scan; else stage=tests; fi
-          python scripts/report_kestra.py --app orders-api --stage "$stage" --state "$JOB_STATE"
+    - uses: actions/checkout@v4
+    - uses: aws-actions/configure-aws-credentials@v4
+      if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+      with:
+        role-to-assume: arn:aws:iam::414053644145:role/cosmotech-orders-api-github-ecr
+        aws-region: us-east-1
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+        cache: pip
+    - name: Show this real CI run in Kestra
+      if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+      run: python scripts/report_kestra.py --app orders-api --stage tests --state running
+    - run: python -m pip install -r requirements.txt ruff==0.17.3
+    - run: python scripts/validate_deployment.py --application orders-api
+    - run: ruff check src tests
+    - id: unit_tests
+      run: python -m pytest tests/unit -q
+    - name: Record tests and start image stage in Kestra
+      if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+      run: 'python scripts/report_kestra.py --app orders-api --stage tests --state success
+
+        python scripts/report_kestra.py --app orders-api --stage build_scan --state running
+
+        '
+    - run: docker build --label org.opencontainers.image.revision=${{ github.sha }} -f src/orders/runtime/Dockerfile.api -t orders-api:${{ github.sha }} .
+    - uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8
+      with:
+        image-ref: orders-api:${{ github.sha }}
+        severity: HIGH,CRITICAL
+        ignore-unfixed: true
+        exit-code: '1'
+    - run: docker save orders-api:${{ github.sha }} -o /tmp/orders-api-image.tar
+    - uses: actions/upload-artifact@v4
+      with:
+        name: orders-api-image
+        path: /tmp/orders-api-image.tar
+        retention-days: 2
+    - name: Record the real test-build-scan outcome
+      if: always() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+      env:
+        TEST_OUTCOME: ${{ steps.unit_tests.outcome }}
+        JOB_STATE: ${{ job.status }}
+      run: 'if [[ "$TEST_OUTCOME" == success ]]; then stage=build_scan; else stage=tests; fi
+
+        python scripts/report_kestra.py --app orders-api --stage "$stage" --state "$JOB_STATE"
+
+        '
   publish:
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && inputs.approved_run_id == ''
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     needs: test-build-scan
     runs-on: ubuntu-latest
     permissions:
@@ -76,201 +71,69 @@ jobs:
     outputs:
       image: ${{ steps.publish.outputs.image }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with: {name: orders-api-image, path: /tmp}
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: arn:aws:iam::414053644145:role/cosmotech-orders-api-github-ecr
-          aws-region: us-east-1
-      - uses: aws-actions/amazon-ecr-login@v2
-      - name: Record ECR publication start
-        run: python scripts/report_kestra.py --app orders-api --stage publish --state running
-      - id: publish
-        shell: bash
-        run: |
-          set -euo pipefail
-          docker load -i /tmp/orders-api-image.tar
-          registry=414053644145.dkr.ecr.us-east-1.amazonaws.com
-          repository=aws-eks-istio-lab-dev-orders-api
-          image="$registry/$repository:sha-$GITHUB_SHA"
-          docker tag "orders-api:$GITHUB_SHA" "$image"
-          if ! aws ecr describe-images --repository-name "$repository" --image-ids "imageTag=sha-$GITHUB_SHA" >/dev/null 2>&1; then
-            docker push "$image"
-          fi
-          digest="$(aws ecr describe-images --repository-name "$repository" --image-ids "imageTag=sha-$GITHUB_SHA" --query 'imageDetails[0].imageDigest' --output text)"
-          echo "image=$registry/$repository@$digest" >> "$GITHUB_OUTPUT"
-          echo "$registry/$repository@$digest" > proposed-image.txt
-      - uses: actions/upload-artifact@v4
-        with: {name: proposed-gitops-image, path: proposed-image.txt}
-      - name: Record ECR publication outcome
-        if: always()
-        env:
-          JOB_STATE: ${{ job.status }}
-        run: python scripts/report_kestra.py --app orders-api --stage publish --state "$JOB_STATE"
-  propose-gitops:
-    if: always() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && (needs.publish.result == 'success' || (github.event_name == 'workflow_dispatch' && inputs.approved_run_id != ''))
+    - uses: actions/checkout@v4
+    - uses: actions/download-artifact@v4
+      with:
+        name: orders-api-image
+        path: /tmp
+    - uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: arn:aws:iam::414053644145:role/cosmotech-orders-api-github-ecr
+        aws-region: us-east-1
+    - uses: aws-actions/amazon-ecr-login@v2
+    - name: Record ECR publication start
+      run: python scripts/report_kestra.py --app orders-api --stage publish --state running
+    - id: publish
+      shell: bash
+      run: "set -euo pipefail\ndocker load -i /tmp/orders-api-image.tar\nregistry=414053644145.dkr.ecr.us-east-1.amazonaws.com\n\
+        repository=aws-eks-istio-lab-dev-orders-api\nimage=\"$registry/$repository:sha-$GITHUB_SHA\"\ndocker tag\
+        \ \"orders-api:$GITHUB_SHA\" \"$image\"\nif ! aws ecr describe-images --repository-name \"$repository\"\
+        \ --image-ids \"imageTag=sha-$GITHUB_SHA\" >/dev/null 2>&1; then\n  docker push \"$image\"\nfi\ndigest=\"\
+        $(aws ecr describe-images --repository-name \"$repository\" --image-ids \"imageTag=sha-$GITHUB_SHA\" --query\
+        \ 'imageDetails[0].imageDigest' --output text)\"\necho \"image=$registry/$repository@$digest\" >> \"$GITHUB_OUTPUT\"\
+        \necho \"$registry/$repository@$digest\" > proposed-image.txt\n"
+    - uses: actions/upload-artifact@v4
+      with:
+        name: proposed-gitops-image
+        path: proposed-image.txt
+    - name: Record ECR publication outcome
+      if: always()
+      env:
+        JOB_STATE: ${{ job.status }}
+      run: python scripts/report_kestra.py --app orders-api --stage publish --state "$JOB_STATE"
+  request-promotion:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     needs: publish
     runs-on: ubuntu-latest
-    timeout-minutes: 10
     permissions:
       contents: read
-      actions: read
       id-token: write
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-      - run: cp scripts/report_kestra.py "$RUNNER_TEMP/report_kestra.py"
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: arn:aws:iam::414053644145:role/cosmotech-orders-api-github-ecr
-          aws-region: us-east-1
-      - name: Record GitOps promotion start
-        run: python "$RUNNER_TEMP/report_kestra.py" --app orders-api --stage gitops --state running
-      - name: Verify approved source run and immutable image
-        id: verified
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SOURCE_RUN: ${{ inputs.approved_run_id }}
-          BUILT_IMAGE: ${{ needs.publish.outputs.image }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ -n "$SOURCE_RUN" ]]; then
-            [[ "$SOURCE_RUN" =~ ^[0-9]+$ ]]
-            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN" > "$RUNNER_TEMP/source-run.json"
-            python3 - <<'CHECK'
-          import json,os,pathlib
-          run=json.loads((pathlib.Path(os.environ['RUNNER_TEMP'])/'source-run.json').read_text())
-          assert run['conclusion']=='success' and run['head_branch']=='main'
-          assert run['path']=='.github/workflows/orders-ci.yml' and run['event'] in ['push','workflow_dispatch']
-          CHECK
-            gh run download "$SOURCE_RUN" --repo "$GITHUB_REPOSITORY" --name proposed-gitops-image --dir "$RUNNER_TEMP/approved-image"
-          fi
-          python3 - <<'CHECK'
-          import json,os,pathlib,re
-          root=pathlib.Path(os.environ['RUNNER_TEMP'])
-          if os.environ['SOURCE_RUN']:
-              run=json.loads((root/'source-run.json').read_text())
-              sha=run['head_sha']
-              image=(root/'approved-image/proposed-image.txt').read_text().strip()
-          else:
-              sha=os.environ['GITHUB_SHA']
-              image=os.environ['BUILT_IMAGE']
-          assert re.fullmatch('[0-9a-f]{40}',sha)
-          assert re.fullmatch(r'414053644145\.dkr\.ecr\.us-east-1\.amazonaws\.com/aws-eks-istio-lab-dev-orders-api@sha256:[0-9a-f]{64}',image)
-          with open(os.environ['GITHUB_OUTPUT'],'a') as output:
-              output.write(f'sha={sha}\nimage={image}\n')
-          CHECK
-      - name: Check out the exact tested application configuration
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ steps.verified.outputs.sha }}
-          path: application-source
-      - name: Prepare the tested complete deployment bundle
-        env:
-          IMAGE: ${{ steps.verified.outputs.image }}
-          SOURCE_SHA: ${{ steps.verified.outputs.sha }}
-        working-directory: application-source
-        run: python scripts/validate_deployment.py --application orders-api --image "$IMAGE" --sha "$SOURCE_SHA" --output "$RUNNER_TEMP/deployment-bundle.json"
-      - uses: actions/create-github-app-token@v2
-        id: app
-        with:
-          app-id: ${{ vars.GITOPS_APP_ID || secrets.GITOPS_APP_ID }}
-          private-key: ${{ secrets.GITOPS_APP_PRIVATE_KEY }}
-          owner: rlcosmo
-          repositories: cosmotech-gitops
-          permission-contents: write
-          permission-pull-requests: write
-      - name: Verify installation token repository scope
-        env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          gh api installation/repositories > "$RUNNER_TEMP/app-repositories.json"
-          python3 - <<'CHECK'
-          import json,os,pathlib
-          value=json.loads((pathlib.Path(os.environ['RUNNER_TEMP'])/'app-repositories.json').read_text())
-          assert [r['full_name'] for r in value['repositories']]==['rlcosmo/cosmotech-gitops'], 'Unexpected repository token scope'
-          assert value['total_count']==1
-          print('Installation token limited to rlcosmo/cosmotech-gitops.')
-          CHECK
-          if gh api repos/rlcosmo/cosmotech-infrastructure-iac >/dev/null 2>&1; then
-            echo 'Unexpected access to private infrastructure repository' >&2
-            exit 1
-          fi
-      - uses: actions/checkout@v4
-        with:
-          repository: rlcosmo/cosmotech-gitops
-          token: ${{ steps.app.outputs.token }}
-          fetch-depth: 0
-      - name: Deliver tested application configuration through a DEV PR
-        env:
-          IMAGE: ${{ steps.verified.outputs.image }}
-          SOURCE_SHA: ${{ steps.verified.outputs.sha }}
-          GH_TOKEN: ${{ steps.app.outputs.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          branch="image/orders-api-${SOURCE_SHA}"
-          if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
-            git fetch origin "$branch"
-            git switch -c "$branch" FETCH_HEAD
-          else
-            git switch -c "$branch"
-          fi
-          python3 - <<'CHECK'
-          import json,os,pathlib
-          bundle=json.loads((pathlib.Path(os.environ['RUNNER_TEMP'])/'deployment-bundle.json').read_text())
-          directory=pathlib.Path('gitops/apps/orders-api/dev')
-          for name,value in bundle['resources'].items():
-              (directory/name).write_text(json.dumps(value,indent=2)+'\n')
-          proof=pathlib.Path('gitops/releases/orders-api-dev.json');proof.parent.mkdir(exist_ok=True)
-          proof.write_text(json.dumps(bundle,indent=2,sort_keys=True)+'\n')
-          body=pathlib.Path(os.environ['RUNNER_TEMP'])/'gitops-pr-body.md'
-          body.write_text('Deliver the complete tested orders-api configuration from its application repository at '+os.environ['SOURCE_SHA']+'.\n\nIncludes Deployment, ConfigMap, Service, HPA and host. Automatic DEV promotion without human approvals. GitOps is the generated delivery mirror; change deploy/dev in the application repository.\n')
-          CHECK
-          git config user.name 'cosmotech-automation[bot]'
-          git config user.email 'cosmotech-automation@users.noreply.github.com'
-          git add gitops/apps/orders-api/dev gitops/releases/orders-api-dev.json
-          if ! git diff --cached --quiet; then
-            git commit -m "chore(orders): propose image $SOURCE_SHA"
-            git push origin "$branch"
-          fi
-          if ! gh pr view "$branch" --repo rlcosmo/cosmotech-gitops --json url --jq .url; then
-            gh pr create --repo rlcosmo/cosmotech-gitops --base main --head "$branch" --title "chore(orders): promote $SOURCE_SHA" --body-file "$RUNNER_TEMP/gitops-pr-body.md"
-          fi
-      - name: Automatically merge the tested DEV application configuration
-        if: vars.DEV_AUTO_PROMOTE == 'true'
-        env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
-          SOURCE_SHA: ${{ steps.verified.outputs.sha }}
-          IMAGE: ${{ steps.verified.outputs.image }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          branch="image/orders-api-${SOURCE_SHA}"
-          gh pr view "$branch" --repo rlcosmo/cosmotech-gitops --json number,state,headRefOid > "$RUNNER_TEMP/promotion-pr.json"
-          if [[ "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["state"])' "$RUNNER_TEMP/promotion-pr.json")" == MERGED ]]; then
-            echo 'DEV promotion already merged; nothing to change.'
-            exit 0
-          fi
-          read -r pr head < <(python3 -c 'import json,sys;p=json.load(open(sys.argv[1]));print(p["number"],p["headRefOid"])' "$RUNNER_TEMP/promotion-pr.json")
-          [[ "$pr" =~ ^[0-9]+$ && "$head" =~ ^[0-9a-f]{40}$ ]]
-          git fetch origin main "$head"
-          git worktree add --detach "$RUNNER_TEMP/dev-validator" origin/main
-          (cd "$RUNNER_TEMP/dev-validator" && python3 scripts/validate_dev_image.py --base origin/main --head "$head" --expected-sha "$SOURCE_SHA" --expected-digest "${IMAGE#*@}" --expected-manifests "$RUNNER_TEMP/deployment-bundle.json")
-          # Concurrent app promotions can advance main after validation. Revalidate every retry.
-          for merge_attempt in $(seq 1 5); do
-            if gh api --method PUT "repos/rlcosmo/cosmotech-gitops/pulls/$pr/merge" -f sha="$head" -f merge_method=squash -f commit_title="chore(dev): promote Orders API $SOURCE_SHA" --jq 'if .merged then .sha else error(.message) end'; then exit 0; fi
-            if [[ "$merge_attempt" == 5 ]]; then exit 1; fi
-            sleep 2
-            git fetch origin main
-            git -C "$RUNNER_TEMP/dev-validator" checkout --detach origin/main
-            (cd "$RUNNER_TEMP/dev-validator" && python3 scripts/validate_dev_image.py --base origin/main --head "$head" --expected-sha "$SOURCE_SHA" --expected-digest "${IMAGE#*@}" --expected-manifests "$RUNNER_TEMP/deployment-bundle.json")
-          done
-      - name: Record GitOps promotion outcome
-        if: always()
-        env:
-          JOB_STATE: ${{ job.status }}
-        run: python "$RUNNER_TEMP/report_kestra.py" --app orders-api --stage gitops --state "$JOB_STATE"
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: arn:aws:iam::414053644145:role/cosmotech-orders-api-github-ecr
+        aws-region: us-east-1
+    - name: Request the single Kestra gate; no GitOps credential is available
+      env:
+        PROPOSED_IMAGE: ${{ needs.publish.outputs.image }}
+      run: python scripts/request_promotion.py --service orders-api --image "$PROPOSED_IMAGE"
+'on':
+  push:
+    branches:
+    - main
+    paths:
+    - deploy/**
+    - scripts/validate_deployment.py
+    - src/**
+    - tests/**
+    - requirements*.txt
+    - .dockerignore
+    - scripts/report_kestra.py
+    - .github/workflows/orders-ci.yml
+  pull_request: null
+  workflow_dispatch: {}
