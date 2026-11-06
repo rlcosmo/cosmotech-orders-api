@@ -65,7 +65,7 @@ def main() -> None:
             if self.path in {"/health/live", "/health/ready"}:
                 return self.respond(200, {"status": "ready"})
             if self.path == "/version":
-                return self.respond(200, {"service": "orders-api", "version": VERSION})
+                return self.respond(200, {"service": "orders-api", "version": VERSION, "deployment_strategy": "rolling"})
             if self.path.startswith("/orders/"):
                 order_id = unquote(self.path.removeprefix("/orders/"))
                 if not 0 < len(order_id) <= 128 or order_id.startswith(("INVENTORY#", "IDEMPOTENCY#")):
