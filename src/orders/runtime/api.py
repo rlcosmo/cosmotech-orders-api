@@ -14,6 +14,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from orders.consumer.repository import DynamoDBOrderRepository, create_dynamodb_resource
 from orders.producer.handler import handler
 from orders.runtime.connectivity import receive_ping, start_connectivity_checks
+from orders.runtime.release import VERSION
 from orders.shared.tracing import configure_tracing
 from orders.shared.validation import MAX_REQUEST_BYTES
 
@@ -64,7 +65,7 @@ def main() -> None:
             if self.path in {"/health/live", "/health/ready"}:
                 return self.respond(200, {"status": "ready"})
             if self.path == "/version":
-                return self.respond(200, {"service": "orders-api", "version": "2.0.0-lab"})
+                return self.respond(200, {"service": "orders-api", "version": VERSION})
             if self.path.startswith("/orders/"):
                 order_id = unquote(self.path.removeprefix("/orders/"))
                 if not 0 < len(order_id) <= 128 or order_id.startswith(("INVENTORY#", "IDEMPOTENCY#")):
