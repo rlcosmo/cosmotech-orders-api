@@ -6,6 +6,8 @@ import re
 import subprocess
 import time
 
+from release_image import publish_version_alias
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -18,6 +20,7 @@ def main():
     pattern=r'[0-9]{12}\.dkr\.ecr\.us-east-1\.amazonaws\.com/aws-eks-istio-lab-dev-'+re.escape(args.service)+r'@(sha256:[a-f0-9]{64})'
     match=re.fullmatch(pattern,args.image)
     if not match:raise SystemExit('Immutable application digest required')
+    image_alias=publish_version_alias(args.service,args.image)
     label={'orders-api':'API','orders-worker':'Worker'}[args.service]
     parameters={'Commit':[sha],'Digest':[match[1]],'RunId':[run],'RunAttempt':[attempt]}
     command=['aws','ssm','send-command','--region','us-east-1','--document-name','CosmoTech-Request-Orders-'+label+'-Promotion','--document-version','$LATEST','--instance-ids','i-0def4e806c49cf60e','--parameters',json.dumps(parameters),'--query','Command.CommandId','--output','text']
@@ -34,7 +37,7 @@ def main():
                 accepted=json.loads(invocation['StandardOutputContent'])
                 if not accepted.get('kestra_execution_id'):
                     raise SystemExit('The trusted request did not return an execution reference')
-                print(json.dumps({'state':'requested','kestra_execution_id':accepted['kestra_execution_id'],
+                print(json.dumps({'state':'requested','image_label':image_alias,'kestra_execution_id':accepted['kestra_execution_id'],
                                   'promotion_validated':False}))
                 return
             if invocation['Status'] in {'Failed','Cancelled','TimedOut'}:
