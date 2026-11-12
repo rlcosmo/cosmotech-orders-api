@@ -1,0 +1,22 @@
+{
+  "api_source": "8cf95ca042ee90a8c5697603029d0bb8be4eca62",
+  "core_sha256": {
+    "control.py": "942e764369c4589a7c4873fbf3c79c3c90a5c54b7fee3d94e320aff2ea02c047",
+    "outbox.py": "52e57da7e6202acb9e7915ecec98113e8f14b79bf037ac5f16fceed11c644a03",
+    "dynamo_outbox.py": "d9a5588799f1c2d575f8e42ee36d3eb9acccd74f9af17e4b97583af4170bd747",
+    "reconciliation.py": "66dba9bb47411be6eb108a30bd30835e767274cefc5dc135111c89444efb9b76",
+    "integrity.py": "fafc0ad18c94eca30e6b04b85beef9ddd35a57de198d91cb23dde210ea84f50c"
+  },
+  "activation_default": false,
+  "iac_core_source_commit": "5abcbbe9a73b4466064fc26f94f35a3f3c2213aa",
+  "vendored_sha256": {
+    "reconciliation.py": "6d43a9c42fa726d7e868fed4b6c080fe22d3f04f2146c316ba7c13eb17e9f314",
+    "integrity.py": "9de00a31309fafdb521f771284c6901233f5b0233274023480b5383762cfc553",
+    "dynamo_outbox.py": "b19fc7c486170c25d58697ebba8af5b2e5afe3b6193c1c5b1b1ffa7b3c757d55",
+    "outbox.py": "00d039da5b6a8ef557d36615198722c7113843e1e2babaa65d6102d1282a2d6d",
+    "control.py": "0bc134c925d0ceea51ba6098d9ba3c4c7a0247e365929e4075c9e58165122aa5"
+  },
+  "adaptations": [
+    "Repository lint/format conventions; validation exception contract preserved."
+  ]
+}

@@ -21,7 +21,8 @@ from orders.shared.validation import MAX_REQUEST_BYTES
 
 def normalize_request(payload: Any) -> Any:
     """Support legacy product_id requests and explicit v2 idempotency IDs."""
-    if isinstance(payload, dict) and "customer_id" in payload and "order_id" not in payload:
+    if (isinstance(payload, dict) and "customer_id" in payload and "order_id" not in payload
+            and os.getenv("ORDERS_DURABLE_OUTBOX") != "true"):
         payload = {**payload, "order_id": str(uuid.uuid4())}
     if isinstance(payload, dict) and isinstance(payload.get("items"), list):
         payload = {**payload, "items": [
@@ -63,6 +64,12 @@ def main() -> None:
                 carrier = {k.lower():v for k,v in self.headers.items() if k.lower() in {"traceparent", "tracestate"}}
                 return self.respond(200, receive_ping("orders-api", carrier))
             if self.path in {"/health/live", "/health/ready"}:
+                if self.path == "/health/ready" and os.getenv("ORDERS_DURABLE_OUTBOX") == "true":
+                    try:
+                        from orders.producer.durable import get_outbox
+                        get_outbox().store.table.get_item(Key={"order_id":"__outbox_health__"},ConsistentRead=True)
+                    except Exception:  # noqa: BLE001 - Readiness fails closed without exposing SDK details.
+                        return self.respond(503, {"error":"Durable journal unavailable"})
                 return self.respond(200, {"status": "ready"})
             if self.path == "/version":
                 return self.respond(200, {"service": "orders-api", "version": VERSION, "deployment_strategy": "rolling"})

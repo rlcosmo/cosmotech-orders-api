@@ -31,7 +31,7 @@ def _response(status_code: int, body: dict[str, Any]) -> dict[str, Any]:
 
 
 def handler(
-    event: dict[str, Any], context: Any, *, sqs_client: Any | None = None
+    event: dict[str, Any], context: Any, *, sqs_client: Any | None = None, durable_outbox: Any | None = None
 ) -> dict[str, Any]:
     """Validate an API request and publish the complete order event to SQS."""
     try:
@@ -57,6 +57,23 @@ def handler(
     except (json.JSONDecodeError, OrderValidationError, AttributeError, TypeError):
         logger.info("order_rejected", extra={"event": "order_rejected", "reason": "invalid_request"})
         return _response(400, {"error": "Invalid request"})
+
+    if os.getenv("ORDERS_DURABLE_OUTBOX") == "true":
+        try:
+            from orders.producer.durable import get_outbox
+            from orders.shared.dr_outbox.outbox import Conflict
+        except ImportError:
+            return _response(503, {"error": "Durable acceptance not configured"})
+        try:
+            journal = durable_outbox if durable_outbox is not None else get_outbox()
+            stored = journal.accept(order)
+            logger.info("order_accepted", extra={"event": "order_accepted", "acceptance": "durable-journal"})
+            return _response(202, {"order_id": stored["order_id"], "status": "PENDING", "acceptance": "durable-journal"})
+        except Conflict:
+            return _response(409, {"error": "Order ID conflicts with accepted content"})
+        except Exception as error:  # noqa: BLE001 - HTTP boundary must not disclose SDK errors.
+            logger.error("durable_acceptance_failed", extra={"event": "durable_acceptance_failed", "error_type": type(error).__name__})
+            return _response(503, {"error": "Durable acceptance unavailable"})
 
     queue_url = os.environ.get("ORDERS_QUEUE_URL")
     if not queue_url:
