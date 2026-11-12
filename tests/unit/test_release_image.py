@@ -49,3 +49,26 @@ def test_publish_alias_reuses_exact_manifest_and_digest(monkeypatch):
         return response({'image':{'imageId':{'imageDigest':digest}}})
     run=Mock(side_effect=call)
     assert image_alias.publish_version_alias(APP,'registry@'+digest,run=run).endswith('-17') and run.call_count==3
+
+
+@pytest.mark.parametrize('second_manifest,second_digest,allowed', [
+    ('same', 'same', True), ('different', 'same', False), ('same', 'different', False),
+])
+def test_digest_lookup_can_repeat_only_identical_tagged_manifests(monkeypatch, second_manifest, second_digest, allowed):
+    monkeypatch.setenv('GITHUB_RUN_NUMBER','18')
+    digest='sha256:'+'a'*64
+    manifest=json.dumps({'schemaVersion':2,'mediaType':'application/vnd.oci.image.index.v1+json'})
+    images=[{'imageId':{'imageDigest':digest,'imageTag':'sha-commit'},'imageManifest':manifest},
+            {'imageId':{'imageDigest':digest if second_digest=='same' else 'sha256:'+'b'*64,
+                        'imageTag':'existing-readable-alias'},
+             'imageManifest':manifest if second_manifest=='same' else manifest+' '}]
+    run=Mock(side_effect=[response(code=1,error='(ImageNotFoundException)'),
+                          response({'images':images,'failures':[]}),
+                          response({'image':{'imageId':{'imageDigest':digest}}})])
+    if allowed:
+        assert image_alias.publish_version_alias(APP,'registry@'+digest,run=run).endswith('-18')
+        assert run.call_count==3
+    else:
+        with pytest.raises(RuntimeError,match='Manifest digest mismatch'):
+            image_alias.publish_version_alias(APP,'registry@'+digest,run=run)
+        assert run.call_count==2

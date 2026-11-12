@@ -35,7 +35,14 @@ def publish_version_alias(service: str, image: str, *, run=subprocess.run) -> st
     response=aws('batch-get-image','--repository-name',repository,'--image-ids','imageDigest='+digest)
     if response.returncode:raise RuntimeError('Cannot read tested image manifest')
     value=json.loads(response.stdout)
-    if value.get('failures') or len(value.get('images',[]))!=1 or value['images'][0]['imageId']['imageDigest']!=digest:raise RuntimeError('Manifest digest mismatch')
+    images=value.get('images',[])
+    # ECR may return one identical manifest per existing tag for a digest lookup.
+    # Accept duplicates only when every digest and the exact manifest bytes agree.
+    if (value.get('failures') or not images
+            or any(item.get('imageId',{}).get('imageDigest')!=digest for item in images)
+            or not isinstance(images[0].get('imageManifest'),str)
+            or any(item.get('imageManifest')!=images[0]['imageManifest'] for item in images)):
+        raise RuntimeError('Manifest digest mismatch')
     with tempfile.NamedTemporaryFile(mode='w',encoding='utf-8') as f:
         f.write(value['images'][0]['imageManifest']);f.flush()
         result=aws('put-image','--repository-name',repository,'--image-tag',tag,'--image-manifest','file://'+f.name)
